@@ -5,24 +5,102 @@ import cv2
 import os
 import shutil
 import imutils
+import io
+from dotenv import load_dotenv
+import boto3
+import pymysql
+import base64
+import hashlib
+
+
+load_dotenv()
+
+DB_HOST = os.environ.get('DB_HOST')
+DB_PORT = int(os.environ.get('DB_PORT'))
+DB_USER = os.environ.get('DB_USER')
+DB_PASSWORD = os.environ.get('DB_PASSWORD')
+DB_NAME = os.environ.get('DB_NAME')
+
+db = pymysql.connect(host=DB_HOST, port=DB_PORT, user=DB_USER, password=DB_PASSWORD, db=DB_NAME, charset='utf8')
+
+ACCESS_KEY_ID = os.environ.get('S3_ACCESS_KEY')  # s3 관련 권한을 가진 IAM계정 정보
+ACCESS_SECRET_KEY = os.environ.get('S3_SECRET_KEY')
+BUCKET_NAME = os.environ.get('S3_BUCKET_NAME')
+S3_REGION = os.environ.get('S3_REGION')
 
 ratio = 1.0
-similarity_threshold = 0.7
+similarity_threshold = 0.5
 
-def compare_with_known_persons(self, face, persons):
-    if len(persons) == 0:
+# def generate_sse_key(input_key):
+#     # SHA-256 해시 객체 생성
+#     digest = hashlib.sha256()
+#
+#     # 입력 키를 바이트로 변환하고 해싱
+#     digest.update(input_key.encode('utf-8'))
+#     hash_bytes = digest.digest()
+#
+#     return hash_bytes
+
+def generate_aes_key(input_data):
+    sha256_hash = hashlib.sha256()
+    sha256_hash.update(input_data.encode('utf-8'))
+    return sha256_hash.digest()[:32]
+
+def generate_key_md5(b64_key):
+    key_bytes = base64.b64decode(b64_key)
+    md5_hash = hashlib.md5(key_bytes).digest()
+    return base64.b64encode(md5_hash).decode('utf-8')
+
+def face_classifier(file, partyId, key) :
+    # todo : file로 들어온 사진 이미지 cv2 형식으로 변환
+    in_memory_file = io.BytesIO()
+    file.save(in_memory_file)
+    data = np.frombuffer(in_memory_file.getvalue(), dtype=np.uint8)
+    color_image_flag = 1  # cv2.IMREAD_COLOR로도 설정 가능
+    image = cv2.imdecode(data, color_image_flag)
+
+    # todo : 이미지에서 얼굴 추출
+    faces = detect_faces(image)
+    cursor = db.cursor()
+    # todo : face 이미지 s3 저장 해결 *^^*
+    s3 = boto3.client('s3', aws_access_key_id=ACCESS_KEY_ID, aws_secret_access_key=ACCESS_SECRET_KEY)
+    sse_key = generate_aes_key(key)
+    encode = base64.b64encode(sse_key).decode('utf-8')
+    md5 = generate_key_md5(encode)
+    sse_conf = {"SSECustomerAlgorithm": "AES256", "SSECustomerKey": encode, "SSECustomerKeyMD5": md5, "ACL": "public-read", "ContentType": 'image/png'}
+
+    for face in faces:
+        is_success, buffer = cv2.imencode('.png', face.image)
+        io_buf = io.BytesIO(buffer)
+        s3.upload_fileobj(io_buf, BUCKET_NAME, face.filename, sse_conf)
+
+    # todo : 생성된 그룹과 인코딩 값 비교
+
+
+    sql = 'select class_id, encoding from face_class where party_id = %s'
+    cursor.execute(sql, partyId)
+    face_classes = cursor.fetchall()
+    print(face_classes)
+
+    # todo : 생성된 그룹에 포함 된다면 그룹 아이디 설정하여 DB 저장하고 그룹 인코딩 값 업데이트
+
+    # todo : 기존 생성된 그룹과 일치하지 않는다면 언노운과 비교하여 가장 가까운 값 찾기
+
+    # todo : 새로운 그룹을 생성하여 DB 업데이트
+def compare_with_known_persons(face, face_classes):
+    if len(face_classes) == 0:
         return None
 
     # see if the face is a match for the faces of known person
-    encodings = [person.encoding for person in persons]
+    encodings = [np.array(fc[1]) for fc in face_classes]
     distances = face_recognition.face_distance(encodings, face.encoding)
     index = np.argmin(distances)
     min_value = distances[index]
-    if min_value < self.similarity_threshold:
+    if min_value < similarity_threshold:
         # face of known person
-        persons[index].add_face(face)
+        #persons[index].add_face(face)
         # re-calculate encoding
-        persons[index].calculate_average_encoding()
+        face_classes[index].calculate_average_encoding()
         face.name = persons[index].name
         return persons[index]
 
@@ -114,33 +192,6 @@ def detect_faces(frame):
         face.location = box
         faces.append(face)
     return faces
-
-# def detect_faces(frame):
-#     rgb = frame[:, :, ::-1]    # 이미지를 RGB format으로 변환
-#     print("rgb")
-#     print(rgb)
-#     # 얼굴 영역을 알아낸다
-#     boxes = face_recognition.face_locations(rgb, model="hog")
-#     print("boxes")
-#     print(boxes)
-#     if not boxes:
-#         return []
-#
-#     # 얼굴 영역을 찾았음. face_encoding을 계산
-#     encodings = face_recognition.face_encodings(rgb, boxes)
-#     print("encodings")
-#     print(encodings)
-#     # Face 생성하여 리턴
-#     faces = []
-#
-#     now = datetime.now()
-#     str_ms = now.strftime('%Y%m%d_%H%M%S.%f')[:-3] + '-'
-#
-#     for i, box in enumerate(boxes):
-#         face_image = get_face_image(frame, box)   # 얼굴 이미지 추출
-#         face = Face(str_ms + str(i) + ".png", face_image, encodings[i])
-#         faces.append(face)
-#     return faces
 
 class Face():
     key = "face_encoding"
@@ -246,12 +297,9 @@ class Person():
         return person
 
 if __name__ == '__main__' :
-    frame = cv2.imread('C:\\test.jpg')
-    faces = detect_faces(frame)
-    image = face_recognition.load_image_file('C:\\test.jpg')
-    face_locations = face_recognition.face_locations(image)
-    # for face in face_locations:
-
-    print(face_locations)
-    for face in faces :
-        face.save("C:\\")
+    cursor = db.cursor()
+    sql = 'select class_id, encoding from face_class where party_id = %s'
+    cursor.execute(sql, 1)
+    face_classes = cursor.fetchall()
+    for fc in face_classes:
+        print(np.array(fc[1]))
