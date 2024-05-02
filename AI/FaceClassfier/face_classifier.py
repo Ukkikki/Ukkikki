@@ -31,16 +31,6 @@ S3_REGION = os.environ.get('S3_REGION')
 ratio = 1.0
 similarity_threshold = 0.5
 
-# def generate_sse_key(input_key):
-#     # SHA-256 해시 객체 생성
-#     digest = hashlib.sha256()
-#
-#     # 입력 키를 바이트로 변환하고 해싱
-#     digest.update(input_key.encode('utf-8'))
-#     hash_bytes = digest.digest()
-#
-#     return hash_bytes
-
 def generate_aes_key(input_data):
     sha256_hash = hashlib.sha256()
     sha256_hash.update(input_data.encode('utf-8'))
@@ -76,11 +66,13 @@ def face_classifier(file, partyId, key) :
 
     # todo : 생성된 그룹과 인코딩 값 비교
 
-
-    sql = 'select class_id, encoding from face_class where party_id = %s'
+    sql = 'select face_group_number, encoding, face_id_list from face_group where party_id = %s order by face_group_number'
     cursor.execute(sql, partyId)
-    face_classes = cursor.fetchall()
-    print(face_classes)
+    face_group_list = cursor.fetchall()
+    # for face in faces:
+    #     if len(face_group_list) == 0:
+    #         face_group_list
+    #     for face_group in face_group_list:
 
     # todo : 생성된 그룹에 포함 된다면 그룹 아이디 설정하여 DB 저장하고 그룹 인코딩 값 업데이트
 
@@ -101,8 +93,9 @@ def compare_with_known_persons(face, face_classes):
         #persons[index].add_face(face)
         # re-calculate encoding
         face_classes[index].calculate_average_encoding()
-        face.name = persons[index].name
-        return persons[index]
+        # face.name = persons[index].name
+        # return persons[index]
+        return None
 
 def compare_with_unknown_faces(face, unknown_faces):
     if len(unknown_faces) == 0:
@@ -297,9 +290,10 @@ class Person():
         return person
 
 if __name__ == '__main__' :
-    cursor = db.cursor()
-    sql = 'select class_id, encoding from face_class where party_id = %s'
+    cursor = db.cursor(pymysql.cursors.DictCursor)
+    sql = 'select face_group_number, encoding, face_list from face_group where party_id = %s order by face_group_number'
     cursor.execute(sql, 1)
-    face_classes = cursor.fetchall()
-    for fc in face_classes:
+    face_group_list = cursor.fetchall()
+    print(len(face_group_list))
+    for fc, i in face_group_list:
         print(np.array(fc[1]))
