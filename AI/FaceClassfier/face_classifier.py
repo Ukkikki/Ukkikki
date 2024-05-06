@@ -12,16 +12,16 @@ import pymysql
 import base64
 import hashlib
 
-
 load_dotenv()
 
-DB_HOST = os.environ.get('DB_HOST')
-DB_PORT = int(os.environ.get('DB_PORT'))
-DB_USER = os.environ.get('DB_USER')
-DB_PASSWORD = os.environ.get('DB_PASSWORD')
-DB_NAME = os.environ.get('DB_NAME')
-
-db = pymysql.connect(host=DB_HOST, port=DB_PORT, user=DB_USER, password=DB_PASSWORD, db=DB_NAME, charset='utf8')
+# DB_HOST = os.environ.get('DB_HOST')
+# DB_PORT = int(os.environ.get('DB_PORT'))
+# DB_USER = os.environ.get('DB_USER')
+# DB_PASSWORD = os.environ.get('DB_PASSWORD')
+# DB_NAME = os.environ.get('DB_NAME')
+#
+# db = pymysql.connect(host=DB_HOST, port=DB_PORT, user=DB_USER, password=DB_PASSWORD, db=DB_NAME, charset='utf8')
+# cursor = db.cursor(pymysql.cursors.DictCursor)
 
 ACCESS_KEY_ID = os.environ.get('S3_ACCESS_KEY')  # s3 관련 권한을 가진 IAM계정 정보
 ACCESS_SECRET_KEY = os.environ.get('S3_SECRET_KEY')
@@ -29,7 +29,7 @@ BUCKET_NAME = os.environ.get('S3_BUCKET_NAME')
 S3_REGION = os.environ.get('S3_REGION')
 
 ratio = 1.0
-similarity_threshold = 0.5
+similarity_threshold = 0.4
 
 def generate_aes_key(input_data):
     sha256_hash = hashlib.sha256()
@@ -41,7 +41,7 @@ def generate_key_md5(b64_key):
     md5_hash = hashlib.md5(key_bytes).digest()
     return base64.b64encode(md5_hash).decode('utf-8')
 
-def face_classifier(file, partyId, key) :
+def face_classifier(file, partyId, key, cursor, db) :
     # todo : file로 들어온 사진 이미지 cv2 형식으로 변환
     in_memory_file = io.BytesIO()
     file.save(in_memory_file)
@@ -51,7 +51,7 @@ def face_classifier(file, partyId, key) :
 
     # todo : 이미지에서 얼굴 추출
     faces = detect_faces(image)
-    cursor = db.cursor()
+
     # todo : face 이미지 s3 저장 해결 *^^*
     s3 = boto3.client('s3', aws_access_key_id=ACCESS_KEY_ID, aws_secret_access_key=ACCESS_SECRET_KEY)
     sse_key = generate_aes_key(key)
@@ -64,65 +64,180 @@ def face_classifier(file, partyId, key) :
         io_buf = io.BytesIO(buffer)
         s3.upload_fileobj(io_buf, BUCKET_NAME, face.filename, sse_conf)
 
-    # todo : 생성된 그룹과 인코딩 값 비교
-
-    sql = 'select face_group_number, encoding, face_id_list from face_group where party_id = %s order by face_group_number'
+    # todo : 생성된 그룹과 인코딩 값 비교를 위해 그룹 데이터 로드
+    sql = 'select * from face_group where party_id = %s'
     cursor.execute(sql, partyId)
-    face_group_list = cursor.fetchall()
-    # for face in faces:
-    #     if len(face_group_list) == 0:
-    #         face_group_list
-    #     for face_group in face_group_list:
+    face_group_list = list(cursor.fetchall())
 
-    # todo : 생성된 그룹에 포함 된다면 그룹 아이디 설정하여 DB 저장하고 그룹 인코딩 값 업데이트
+    # face_id_list 를 통해서 실제 face 객체를 로드
+    for face_group in face_group_list :
+        print(face_group['face_list'])
+        if face_group['face_list'] == '[]':
+            continue
+        face_id_list = [int(x) for x in face_group['face_list'][1:-1].split(',')]
+        face_list = []
+        for face_id in face_id_list:
+            sql = 'select * from face where id = %s'
+            cursor.execute(sql, face_id)
+            face_list.append(cursor.fetchall())
 
-    # todo : 기존 생성된 그룹과 일치하지 않는다면 언노운과 비교하여 가장 가까운 값 찾기
+        face_group['face_list'] = face_list
 
-    # todo : 새로운 그룹을 생성하여 DB 업데이트
-def compare_with_known_persons(face, face_classes):
-    if len(face_classes) == 0:
-        return None
+    for face in faces:
+        # 분류된 그룹이 없다면 그룹 0으로 하나 생성
+        face_group_list_len = len(face_group_list)
+        if face_group_list_len == 0:
+            sql = 'insert into face(party_id, face_image_url, origin_image_url, encoding, face_group_number) values(%s, %s, %s, %s, %s)'
+            cursor.execute(sql, (partyId, face.filename, file, face.encoding, 0))
+            sql = 'select * from face where face_image_url = %s'
+            cursor.execute(sql, face.filename)
+            facedb = cursor.fetchall()
+            face_list = [facedb]
+            face_group_list.append({'face_group_number' : 0, 'encoding' : face.encoding, 'face_list' : face_list, 'image_count' : 1})
+            face_id_list = [facedb[0]['id']]
+            sql = 'insert into face_group(party_id, face_group_number, encoding, face_list, image_count) values (%s, %s, %s, %s, %s)'
+            cursor.execute(sql, (partyId, 0, face.encoding, str(face_id_list), 1))
+            db.commit()
+        # 이미 그룹이 존재한다면
+        else:
+            # 그룹 리스트를 아는 사람과 모르는 사람으로 구분
+            unknown_face_list = []
+            known_face_group_list = []
 
-    # see if the face is a match for the faces of known person
-    encodings = [np.array(fc[1]) for fc in face_classes]
+            for face_group in face_group_list:
+                if face_group['face_group_number'] == 0:
+                    print(face_group)
+                    if face_group['image_count'] == 0:
+                        continue
+                    else:
+                        if np.ndim(face_group['face_list']) == 2:
+                            for unknown_face in face_group['face_list']:
+                                unknown_face_list.append(unknown_face[0])
+                        else:
+                            unknown_face_list = face_group['face_list']
+                else:
+                    known_face_group_list.append(face_group)
+
+            print("언너운페이스리스트")
+            print(unknown_face_list)
+            print("노운페이스그룹리스트")
+            print(known_face_group_list)
+
+            flag = compare_with_known_face_group(known_face_group_list, face, partyId, file, cursor, db)
+            if flag:
+                group_zero = {"party_id": partyId, 'face_group_number': 0, 'face_list': unknown_face_list, 'image_count' : len(unknown_face_list)}
+                face_group_list = []
+                face_group_list.append(group_zero)
+                for face_group in known_face_group_list:
+                    face_group_list.append(face_group)
+                continue
+
+            compare_with_unknown_face(unknown_face_list,face,partyId,file,face_group_list_len,known_face_group_list, cursor, db)
+            group_zero = {"party_id": partyId, 'face_group_number': 0, 'face_list': unknown_face_list, 'image_count' : len(unknown_face_list)}
+            face_group_list = []
+            face_group_list.append(group_zero)
+            for face_group in known_face_group_list:
+                face_group_list.append(face_group)
+
+def compare_with_known_face_group(known_face_group_list, face, partyId, file, cursor, db):
+    if len(known_face_group_list) == 0:
+        return False
+
+    encodings = []
+    for face_group in known_face_group_list:
+        data = str(face_group['encoding'])
+        data_string_no_newlines = data[1:-1].replace('\n', '')
+        encodings.append(np.fromstring(data_string_no_newlines, sep=' '))
+
     distances = face_recognition.face_distance(encodings, face.encoding)
     index = np.argmin(distances)
     min_value = distances[index]
     if min_value < similarity_threshold:
         # face of known person
-        #persons[index].add_face(face)
+        sql = 'insert into face(party_id, face_image_url, origin_image_url, encoding, face_group_number) values(%s, %s, %s, %s, %s)'
+        cursor.execute(sql, (partyId, face.filename, file, face.encoding, known_face_group_list[index]['face_group_number']))
+        sql = 'select * from face where face_image_url = %s'
+        cursor.execute(sql, face.filename)
+        face_data = cursor.fetchall()
+        known_face_group_list[index]['face_list'].append(face_data)
+        print("아는 그룹 리스트에 추가!!!!")
+        print(index)
+        print(known_face_group_list[index]['face_list'])
         # re-calculate encoding
-        face_classes[index].calculate_average_encoding()
-        # face.name = persons[index].name
-        # return persons[index]
-        return None
+        re_encodings = []
+        for face_list in known_face_group_list[index]['face_list']:
+            for known_face in face_list:
+                print(known_face)
+                re_encodings.append(np.fromstring(known_face['encoding'][1:-1], sep=' '))
+        known_face_group_list[index]['encoding'] = np.average(re_encodings, axis=0)
+        sql = 'update face_group set encoding = %s, face_list = %s where face_group_number = %s and party_id = %s'
+        face_id_list = []
+        for face_list in known_face_group_list[index]['face_list']:
+            for known_face in face_list:
+                face_id_list.append(known_face['id'])
+        cursor.execute(sql, (known_face_group_list[index]['encoding'], str(face_id_list), known_face_group_list[index]['face_group_number'], partyId))
+        db.commit()
+        return True
 
-def compare_with_unknown_faces(face, unknown_faces):
-    if len(unknown_faces) == 0:
-        # this is the first face
-        unknown_faces.append(face)
-        face.name = "unknown"
-        return
+def compare_with_unknown_face(unknown_face_list, face, partyId, file, face_group_list_len, known_face_group_list, cursor, db):
+    if len(unknown_face_list) == 0:
+        sql = 'insert into face(party_id, face_image_url, origin_image_url, encoding, face_group_number) values(%s, %s, %s, %s, %s)'
+        cursor.execute(sql, (partyId, face.filename, file, face.encoding, 0))
+        sql = 'select * from face where face_image_url = %s'
+        cursor.execute(sql, face.filename)
+        facedb = cursor.fetchall()
+        unknown_face_list.append(facedb[0])
+        face_id_list = []
+        for unknown_face in unknown_face_list:
+            face_id_list.append(unknown_face['id'])
+        sql = 'update face_group set face_list = %s, image_count = %s where face_group_number = %s and party_id = %s'
+        cursor.execute(sql,(str(face_id_list), len(face_id_list), 0, partyId))
+        db.commit()
+        return 0
 
-    encodings = [face.encoding for face in unknown_faces]
+    encodings = [np.fromstring(unknown_face['encoding'][1:-1], sep=' ') for unknown_face in unknown_face_list]
+
     distances = face_recognition.face_distance(encodings, face.encoding)
     index = np.argmin(distances)
     min_value = distances[index]
     if min_value < similarity_threshold:
         # two faces are similar - create new person with two faces
-        person = Person()
-        newly_known_face = unknown_faces.pop(index)
-        person.add_face(newly_known_face)
-        person.add_face(face)
-        person.calculate_average_encoding()
-        face.name = person.name
-        newly_known_face.name = person.name
-        return person
+        sql = 'insert into face(party_id, face_image_url, origin_image_url, encoding, face_group_number) values(%s, %s, %s, %s, %s)'
+        cursor.execute(sql, (partyId, face.filename, file, face.encoding, face_group_list_len))
+        sql = 'select * from face where face_image_url = %s'
+        cursor.execute(sql, face.filename)
+        facedb = cursor.fetchall()
+        encoding = np.average([encodings[index], face.encoding], axis=0)
+        face_id_list = [unknown_face_list[index]['id'], facedb[0]['id']]
+        known_face_group_list.append(
+            {'face_group_number': face_group_list_len, 'encoding': str(encoding), 'face_list': face_id_list})
+        sql = 'insert into face_group(party_id, face_group_number, encoding, face_list) values (%s, %s, %s, %s)'
+        cursor.execute(sql, (partyId, face_group_list_len, encoding, str(face_id_list)))
+        sql = 'update face set face_group_number = %s where id = %s'
+        cursor.execute(sql, (face_group_list_len, unknown_face_list[index]['id']))
+        # face_group 0번에서 face_list 수정
+        unknown_face_list.pop(index)
+        face_id_list = []
+        for unknown_face in unknown_face_list:
+            face_id_list.append(unknown_face['id'])
+        sql = 'update face_group set face_list = %s, image_count = %s where face_group_number = 0 and party_id = %s'
+        cursor.execute(sql, (str(face_id_list), len(face_id_list),partyId))
+        db.commit()
+        return 0
     else:
-        # unknown face
-        unknown_faces.append(face)
-        face.name = "unknown"
-        return None
+        sql = 'insert into face(party_id, face_image_url, origin_image_url, encoding, face_group_number) values(%s, %s, %s, %s, %s)'
+        cursor.execute(sql, (partyId, face.filename, file, face.encoding, 0))
+        sql = 'select * from face where face_image_url = %s'
+        cursor.execute(sql, face.filename)
+        facedb = cursor.fetchall()
+        unknown_face_list.append(facedb[0])
+        face_id_list = []
+        for unknown_face in unknown_face_list:
+            face_id_list.append(unknown_face['id'])
+        sql = 'update face_group set face_list = %s, image_count = %s where face_group_number = 0 and party_id = %s'
+        cursor.execute(sql, (str(face_id_list), len(face_id_list), partyId))
+        db.commit()
+        return 0
 
 def get_face_image(frame, box):
     img_height, img_width = frame.shape[:2]
@@ -293,7 +408,11 @@ if __name__ == '__main__' :
     cursor = db.cursor(pymysql.cursors.DictCursor)
     sql = 'select face_group_number, encoding, face_list from face_group where party_id = %s order by face_group_number'
     cursor.execute(sql, 1)
-    face_group_list = cursor.fetchall()
-    print(len(face_group_list))
-    for fc, i in face_group_list:
-        print(np.array(fc[1]))
+    face_group_list = list(cursor.fetchall())
+    print(type(face_group_list))
+    face_group_list.append({'face_group_number' : 1, 'encoding' : '456', 'face_list' : '[2,3,4]'})
+    # face_group_list = {'face_group_number' : 1, 'encoding' : '456', 'face_list' : '[2,3,4]'}
+    for fc in face_group_list:
+        face_list = [int(x) for x in fc['face_list'][1:-1].split(',')]
+        print(type(fc['face_list']))
+        print(face_list[0])
