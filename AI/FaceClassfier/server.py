@@ -2,6 +2,9 @@ from flask import Flask, render_template, request
 import face_classifier
 import pymysql
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = int(os.environ.get('DB_PORT'))
@@ -9,14 +12,9 @@ DB_USER = os.environ.get('DB_USER')
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_NAME = os.environ.get('DB_NAME')
 
-
-
 app = Flask(__name__)
-fc = face_classifier
 
-@app.route('/upload')
-def hello_world():
-    return render_template('upload.html')
+fc = face_classifier
 
 @app.route('/uploader', methods=['POST'])
 def uploader_file():
@@ -28,8 +26,7 @@ def uploader_file():
         key = request.form['key']
         file = request.files.get("file")
         fc.face_classifier(file, partyId, key, cursor, db)
-    return 'upload'
-
+        return "Success", 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5002)
+    app.run(host='0.0.0.0', port=5001)
