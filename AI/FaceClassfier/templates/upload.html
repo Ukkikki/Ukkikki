@@ -5,11 +5,14 @@
     <title>Title</title>
 </head>
 <body>
-    <form action = "http://localhost:5002/uploader"
+    <form action = "http://localhost:5001/uploader"
           method = "POST"
           enctype = "multipart/form-data">
         <input type="file" name = "file"/>
-        <input type="text" name = "PK"/>
+        <input type="text" name = "partyId"/>
+        <input type="text" name = "key"/>
+        <input type="text" name = "photoId"/>
+        <input type="text" name = "index"/>
         <input type="submit"/>
     </form>
 </body>

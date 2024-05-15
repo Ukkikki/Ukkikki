@@ -1,7 +1,10 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, json
 import face_classifier
 import pymysql
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = int(os.environ.get('DB_PORT'))
@@ -13,6 +16,10 @@ DB_NAME = os.environ.get('DB_NAME')
 
 app = Flask(__name__)
 fc = face_classifier
+
+@app.route('/test')
+def test():
+    return render_template('test.html')
 
 @app.route('/upload')
 def hello_world():
@@ -26,10 +33,24 @@ def uploader_file():
         # 비디오 아웃풋명 및 디렉토리 네이밍을 위한 파라미터
         partyId = request.form['partyId']
         key = request.form['key']
+        photoId = request.form['photoId']
+        index = request.form['index']
         file = request.files.get("file")
-        fc.face_classifier(file, partyId, key, cursor, db)
-    return 'upload'
+        print(request)
+        print(request.form)
+        print(partyId)
+        print(key)
+        print(file.filename)
+        fc.face_classifier(file, partyId, key, cursor, db, photoId)
+        response = app.response_class(
+            response=json.dumps({
+                'result': 'finish',
+                'index': index
+            }),
+            mimetype='application/json'
+        )
+    return response
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5002)
+    app.run(host='0.0.0.0', port=5001)
