@@ -17,14 +17,6 @@ DB_NAME = os.environ.get('DB_NAME')
 app = Flask(__name__)
 fc = face_classifier
 
-@app.route('/test')
-def test():
-    return render_template('test.html')
-
-@app.route('/upload')
-def hello_world():
-    return render_template('upload.html')
-
 @app.route('/uploader', methods=['POST'])
 def uploader_file():
     if request.method == 'POST':
@@ -36,11 +28,7 @@ def uploader_file():
         photoId = request.form['photoId']
         index = request.form['index']
         file = request.files.get("file")
-        print(request)
-        print(request.form)
-        print(partyId)
-        print(key)
-        print(file.filename)
+
         fc.face_classifier(file, partyId, key, cursor, db, photoId)
         response = app.response_class(
             response=json.dumps({
