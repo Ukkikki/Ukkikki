@@ -385,8 +385,6 @@
 
 - <a href='https://www.figma.com/file/ylJLtIuPKDbnJ2GB7gQQ14/D202-Figma?type=design&node-id=0%3A1&mode=design&t=6fw9t7T0EAJgBM2A-1'>Figma</a>
 
-- <a href='https://indecisive-radius-a20.notion.site/32c5b997a9b84f4d8c64a06274f3cc54?pvs=4'>시퀀스 다이어그램</a>
-
 <br/>
 <br/>
 
