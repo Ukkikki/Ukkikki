@@ -102,9 +102,12 @@
         이미지 그룹 앨범 UI/UX
       </td>
       <td align='center'>
-        그룹 앨범 UI/UX <br/>
+        디자인 총괄 <br/>
+        디렉토리 관리 UI/UX <br/>
         파일 관리 UI/UX <br/>
-        사진 좋아요, 메모 UI/UX
+        실시간 알람 UI/UX <br/>
+        실시간 채팅 UI/UX <br/>
+        암호화 S3 이미지 조회
       </td>
       <td align='center'>
         AI 인물 분류 서버 개발 <br/>
@@ -114,8 +117,9 @@
       </td>
       <td align='center'>
         그룹 관리 API <br/>
-        알람 API <br/>
-        채팅 API
+        게시판 API <br/>
+        실시간 알람 API <br/>
+        실시간 채팅 API
       </td>
       <td align='center'>
         디렉토리 관리 API <br/>
